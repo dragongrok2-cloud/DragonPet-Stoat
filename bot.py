@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Dragon Pet — добрый дракон-питомец для Stoat.
-С инвентарём, едой и одеждой.
+С инвентарём, едой, одеждой и возможностью находить предметы.
 """
 
 import os
 import random
 import json
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -28,25 +29,37 @@ if not TOKEN:
 # -------------------- Предметы --------------------
 
 FOODS = {
-    "мясо": {"name": "Сочное мясо", "happiness": 12, "energy": 18, "emoji": "🥩"},
-    "рыба": {"name": "Свежая рыба", "happiness": 10, "energy": 15, "emoji": "🐟"},
-    "ягоды": {"name": "Лесные ягоды", "happiness": 15, "energy": 8, "emoji": "🫐"},
-    "мёд": {"name": "Горный мёд", "happiness": 20, "energy": 10, "emoji": "🍯"},
-    "молоко": {"name": "Тёплое молоко", "happiness": 14, "energy": 12, "emoji": "🥛"},
-    "яблоко": {"name": "Сочное яблоко", "happiness": 8, "energy": 6, "emoji": "🍎"},
+    "мясо": {"name": "Сочное мясо", "happiness": 12, "energy": 18, "emoji": "🥩", "rarity": "обычный"},
+    "рыба": {"name": "Свежая рыба", "happiness": 10, "energy": 15, "emoji": "🐟", "rarity": "обычный"},
+    "ягоды": {"name": "Лесные ягоды", "happiness": 15, "energy": 8, "emoji": "🫐", "rarity": "обычный"},
+    "мёд": {"name": "Горный мёд", "happiness": 20, "energy": 10, "emoji": "🍯", "rarity": "необычный"},
+    "молоко": {"name": "Тёплое молоко", "happiness": 14, "energy": 12, "emoji": "🥛", "rarity": "обычный"},
+    "яблоко": {"name": "Сочное яблоко", "happiness": 8, "energy": 6, "emoji": "🍎", "rarity": "обычный"},
+    "драконий фрукт": {"name": "Драконий фрукт", "happiness": 25, "energy": 20, "emoji": "🐉", "rarity": "редкий"},
 }
 
 CLOTHES = {
-    "седло": {"name": "Классическое седло", "emoji": "🪑", "desc": "Удобное седло для всадника"},
-    "шарф": {"name": "Тёплый шарф", "emoji": "🧣", "desc": "Мягкий шарф на шею"},
-    "бандана": {"name": "Бандана", "emoji": "🧧", "desc": "Стильная бандана"},
-    "ошейник": {"name": "Кожаный ошейник", "emoji": "📿", "desc": "Простой, но надёжный"},
-    "плащ": {"name": "Дорожный плащ", "emoji": "🧥", "desc": "Защищает от ветра"},
-    "корона": {"name": "Маленькая корона", "emoji": "👑", "desc": "Для особых случаев"},
-    "очки": {"name": "Круглые очки", "emoji": "👓", "desc": "Выглядит умно"},
+    "седло": {"name": "Классическое седло", "emoji": "🪑", "desc": "Удобное седло для всадника", "rarity": "обычный"},
+    "шарф": {"name": "Тёплый шарф", "emoji": "🧣", "desc": "Мягкий шарф на шею", "rarity": "обычный"},
+    "бандана": {"name": "Бандана", "emoji": "🧧", "desc": "Стильная бандана", "rarity": "обычный"},
+    "ошейник": {"name": "Кожаный ошейник", "emoji": "📿", "desc": "Простой, но надёжный", "rarity": "обычный"},
+    "плащ": {"name": "Дорожный плащ", "emoji": "🧥", "desc": "Защищает от ветра", "rarity": "необычный"},
+    "корона": {"name": "Маленькая корона", "emoji": "👑", "desc": "Для особых случаев", "rarity": "редкий"},
+    "очки": {"name": "Круглые очки", "emoji": "👓", "desc": "Выглядит умно", "rarity": "необычный"},
+    "накидка звёзд": {"name": "Накидка звёзд", "emoji": "🌌", "desc": "Мерцает ночью", "rarity": "редкий"},
 }
 
-# Стартовый инвентарь
+# Что можно найти
+FINDABLE_FOOD = ["мясо", "рыба", "ягоды", "мёд", "молоко", "яблоко", "драконий фрукт"]
+FINDABLE_CLOTHES = ["шарф", "бандана", "ошейник", "плащ", "очки", "корона", "накидка звёзд"]
+
+# Веса редкости (чем выше — тем чаще)
+RARITY_WEIGHTS = {
+    "обычный": 70,
+    "необычный": 25,
+    "редкий": 5,
+}
+
 DEFAULT_INVENTORY = {
     "мясо": 3,
     "рыба": 2,
@@ -56,6 +69,8 @@ DEFAULT_INVENTORY = {
     "шарф": 1,
 }
 
+FIND_COOLDOWN = 90  # секунд между поисками
+
 # -------------------- Состояние --------------------
 
 class DragonState:
@@ -64,7 +79,8 @@ class DragonState:
         self.energy = 70
         self.mood = "довольный"
         self.inventory = DEFAULT_INVENTORY.copy()
-        self.equipped = {"седло": True}  # что надето
+        self.equipped = {"седло": True}
+        self.last_find = 0
         self.load()
 
     def save(self):
@@ -74,6 +90,7 @@ class DragonState:
             "mood": self.mood,
             "inventory": self.inventory,
             "equipped": self.equipped,
+            "last_find": self.last_find,
         }
         DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -86,6 +103,7 @@ class DragonState:
                 self.mood = data.get("mood", "довольный")
                 self.inventory = data.get("inventory", DEFAULT_INVENTORY.copy())
                 self.equipped = data.get("equipped", {"седло": True})
+                self.last_find = data.get("last_find", 0)
             except Exception:
                 pass
 
@@ -133,10 +151,9 @@ class DragonState:
     def wear(self, item_key: str):
         if item_key not in CLOTHES:
             return None, "Такой одежды у меня нет в списке."
-        if self.inventory.get(item_key, 0) <= 0 and item_key not in self.equipped:
+        if self.inventory.get(item_key, 0) <= 0 and not self.equipped.get(item_key):
             return None, f"У меня нет «{CLOTHES[item_key]['name']}»."
 
-        # Если уже надето — снимаем
         if self.equipped.get(item_key):
             self.equipped[item_key] = False
             self.save()
@@ -152,6 +169,48 @@ class DragonState:
 
     def get_equipped_list(self):
         return [k for k, v in self.equipped.items() if v]
+
+    def can_find(self):
+        return time.time() - self.last_find >= FIND_COOLDOWN
+
+    def time_until_find(self):
+        remaining = FIND_COOLDOWN - (time.time() - self.last_find)
+        return max(0, int(remaining))
+
+    def find_item(self):
+        """Пытается найти предмет. Возвращает (item_dict, key, kind) или (None, None, None)"""
+        if not self.can_find():
+            return None, None, None
+
+        # 75% еда, 25% одежда
+        if random.random() < 0.75:
+            pool = FINDABLE_FOOD
+            kind = "food"
+            catalog = FOODS
+        else:
+            pool = FINDABLE_CLOTHES
+            kind = "clothes"
+            catalog = CLOTHES
+
+        # Взвешенный выбор по редкости
+        weighted = []
+        for key in pool:
+            rarity = catalog[key].get("rarity", "обычный")
+            weight = RARITY_WEIGHTS.get(rarity, 10)
+            weighted.extend([key] * weight)
+
+        key = random.choice(weighted)
+        amount = 1
+        if kind == "food" and random.random() < 0.3:
+            amount = random.randint(1, 3)
+
+        self.add_item(key, amount)
+        self.last_find = time.time()
+        self.energy = max(5, self.energy - random.randint(4, 10))  # поиск тратит силы
+        self._update_mood()
+        self.save()
+
+        return catalog[key], key, kind
 
 state = DragonState()
 
@@ -196,6 +255,13 @@ EAT_PHRASES = [
     "*облизывается и тихо мурлычет* идеально",
 ]
 
+FIND_PHRASES = [
+    "*рыщет носом по земле и вдруг радостно фыркает* Нашёл!",
+    "*копается лапой и вытаскивает что-то* Смотри, что тут было~",
+    "*принюхивается, потом довольно урчит* Удачная находка",
+    "*взмахивает хвостом* Ого, это мне?",
+]
+
 # -------------------- Бот --------------------
 
 bot = commands.Bot(command_prefix=PREFIX)
@@ -231,6 +297,44 @@ async def cmd_nuzzle(ctx):
 async def cmd_wing(ctx):
     await ctx.send(random.choice(WING_PHRASES))
 
+# ——— Поиск предметов ———
+
+@bot.command(name="find", aliases=["искать", "найти", "добыть", "поиск", "рыться"])
+async def cmd_find(ctx):
+    if not state.can_find():
+        remaining = state.time_until_find()
+        await ctx.send(f"*устало садится* Подожди ещё {remaining} сек., я немного устал искать...")
+        return
+
+    if state.energy < 15:
+        await ctx.send("*вяло шевелит хвостом* У меня слишком мало сил. Сначала отдохну (`!rest`).")
+        return
+
+    item, key, kind = state.find_item()
+    if not item:
+        await ctx.send("*грустно смотрит по сторонам* Ничего не нашёл...")
+        return
+
+    phrase = random.choice(FIND_PHRASES)
+    rarity = item.get("rarity", "обычный")
+    rarity_text = {"обычный": "", "необычный": " ✨", "редкий": " 🌟"}.get(rarity, "")
+
+    if kind == "food":
+        amount = state.inventory.get(key, 1)
+        await ctx.send(
+            f"{phrase}\n\n"
+            f"{item['emoji']} **{item['name']}**{rarity_text}\n"
+            f"Теперь у меня: {amount} шт.\n"
+            f"*энергия: {state.energy}%*"
+        )
+    else:
+        await ctx.send(
+            f"{phrase}\n\n"
+            f"{item['emoji']} **{item['name']}**{rarity_text}\n"
+            f"{item.get('desc', '')}\n"
+            f"*Можно надеть командой `{PREFIX}wear {key}`*"
+        )
+
 # ——— Инвентарь, еда, одежда ———
 
 @bot.command(name="inventory", aliases=["инвентарь", "инв", "сумка", "вещи"])
@@ -263,7 +367,7 @@ async def cmd_eat(ctx, *, food_name: str = None):
     if not food_name:
         available = [f"{FOODS[k]['emoji']} `{k}`" for k in state.inventory if k in FOODS]
         if not available:
-            await ctx.send("*грустно смотрит* У меня нет еды...")
+            await ctx.send("*грустно смотрит* У меня нет еды... Попробуй `!find`")
             return
         await ctx.send("Что мне съесть?\n" + ", ".join(available) + f"\n\nПример: `{PREFIX}eat мясо`")
         return
@@ -285,12 +389,12 @@ async def cmd_eat(ctx, *, food_name: str = None):
 async def cmd_wear(ctx, *, item_name: str = None):
     if not item_name:
         available = []
-        for k in list(state.inventory.keys()) + list(state.equipped.keys()):
+        for k in set(list(state.inventory.keys()) + list(state.equipped.keys())):
             if k in CLOTHES:
                 status = "надето" if state.equipped.get(k) else "в инвентаре"
                 available.append(f"{CLOTHES[k]['emoji']} `{k}` ({status})")
         if not available:
-            await ctx.send("*осматривает себя* Мне пока нечего надеть...")
+            await ctx.send("*осматривает себя* Мне пока нечего надеть... Может, поищу? (`!find`)")
             return
         await ctx.send("Что надеть или снять?\n" + "\n".join(available) + f"\n\nПример: `{PREFIX}wear шарф`")
         return
@@ -298,7 +402,7 @@ async def cmd_wear(ctx, *, item_name: str = None):
     key = item_name.lower().strip()
     item, action = state.wear(key)
     if action is None:
-        await ctx.send(f"*{item}*")  # item здесь — текст ошибки
+        await ctx.send(f"*{item}*")
         return
 
     if action == "надето":
@@ -311,12 +415,15 @@ async def cmd_status(ctx):
     equipped = state.get_equipped_list()
     eq_text = ", ".join(f"{CLOTHES[k]['emoji']} {CLOTHES[k]['name']}" for k in equipped if k in CLOTHES) if equipped else "ничего особенного"
 
+    find_status = "можно искать" if state.can_find() else f"через {state.time_until_find()} сек."
+
     await ctx.send(
         f"**Состояние дракона**\n"
         f"• Настроение: {state.mood}\n"
         f"• Счастье: {state.happiness}%\n"
         f"• Энергия: {state.energy}%\n"
-        f"• Надето: {eq_text}\n\n"
+        f"• Надето: {eq_text}\n"
+        f"• Поиск: {find_status}\n\n"
         f"*добрый дракон с седлом всегда рядом~*"
     )
 
@@ -332,9 +439,10 @@ async def cmd_help(ctx):
         f"`{PREFIX}wing` / `{PREFIX}крыло` — укрыть крылом\n\n"
         f"**Инвентарь и уход**\n"
         f"`{PREFIX}inventory` / `{PREFIX}инв` — показать вещи\n"
-        f"`{PREFIX}eat <еда>` / `{PREFIX}есть` — покормить\n"
-        f"`{PREFIX}wear <вещь>` / `{PREFIX}надеть` — надеть/снять\n"
-        f"`{PREFIX}status` / `{PREFIX}статус` — состояние\n\n"
+        f"`{PREFIX}eat <еда>` — покормить\n"
+        f"`{PREFIX}wear <вещь>` — надеть/снять\n"
+        f"`{PREFIX}find` / `{PREFIX}искать` — поискать предметы\n"
+        f"`{PREFIX}status` — состояние\n\n"
         f"*Я просто добрый дракон с седлом. Буду рядом.*"
     )
     await ctx.send(text)
