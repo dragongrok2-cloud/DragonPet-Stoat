@@ -1,0 +1,3 @@
+stoat.py @ git+https://github.com/MCausc78/stoat.py@master
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
